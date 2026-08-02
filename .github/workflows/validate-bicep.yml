@@ -1,0 +1,43 @@
+name: Validate Bicep
+
+# ---------------------------------------------------------------------------
+# Trigger: every pull request and every push to main.
+# This workflow validates that the Bicep template compiles cleanly.
+# It does NOT authenticate to Azure and does NOT deploy any resources.
+# ---------------------------------------------------------------------------
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  validate-bicep:
+    name: Compile Bicep template
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Azure CLI
+        # The ubuntu-latest runner ships with Azure CLI pre-installed.
+        # This step ensures the Bicep extension is present and up to date.
+        run: az bicep install
+
+      - name: Validate Bicep compiles
+        # Compile infra/main.bicep to ARM JSON to verify there are no syntax
+        # or semantic errors.  The generated JSON file is discarded afterwards
+        # and must never be committed (see .gitignore).
+        run: |
+          az bicep build --file infra/main.bicep
+          echo "Bicep compilation succeeded."
+
+      - name: Remove generated ARM JSON
+        # Belt-and-suspenders: ensure the compiled JSON is not accidentally
+        # staged or uploaded as a workflow artifact.
+        if: always()
+        run: rm -f infra/main.json

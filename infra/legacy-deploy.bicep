@@ -1,10 +1,12 @@
-targetScope = 'resourceGroup'
-
 var prefix string = 'zava'
 var suffix = take(uniqueString(resourceGroup().id), 6)
 
 var resourceNameBase = '${prefix}${suffix}'
 
+@description('The Id of the Azure AD User.')
+param azureAdUserId string
+@description('The Login of the Azure AD User (ex: username@domain.onmicrosoft.com).')
+param azureAdUserLogin string
 
 @description('The VM size for the virtual machines. Allows Intel and AMD 4-core options with premium and non-premium storage.')
 @allowed([
@@ -38,17 +40,13 @@ param deploySqlMi bool = true
 
 // repository parameters removed (unused)
 
-@description('Pinned GitHub release base URL containing the deployment artifacts. Example: https://github.com/OWNER/REPOSITORY/releases/download/v1.0.0')
-param artifactReleaseBaseUrl string
+@description('URL to the database backup file accessible by the VM (e.g. storage SAS URL).')
+param databaseBackupFileUrl string = 'database.bak'
 
-var databaseBackupFileUrl = '${artifactReleaseBaseUrl}/database.bak'
-var sqlVmScriptArchiveUrl = '${artifactReleaseBaseUrl}/sql-vm-config.zip'
+@description('URL to the sql VM DSC zip archive (e.g. storage SAS URL).')
+param sqlVmScriptArchiveUrl string = 'sql-vm-config.zip'
 
-@description('Azure region for the lab resources. Defaults to the Skillable-managed resource group location.')
-param location string = resourceGroup().location
-
-@description('Marketplace image version for the source SQL Server VM. Use an exact tested version for production.')
-param sourceVmImageVersion string = 'latest'
+var location = resourceGroup().location
 
 // restore parameter removed (unused)
 
@@ -63,23 +61,12 @@ var onPremSqlVmPrefix = '${onPremPrefix}-sql'
 
 var sqlVmScriptName = 'sql-vm-config.ps1'
 
-@description('Administrator username for the source SQL Server VM.')
-param sourceAdminUsername string = 'demouser'
-
-@secure()
-@description('Administrator password for the source SQL Server VM and source SQL Server configuration.')
-param sourceAdminPassword string
-
-@description('SQL administrator username for Azure SQL Managed Instance.')
-param sqlMiAdminUsername string = 'demouser'
-
-@secure()
-@description('SQL administrator password for Azure SQL Managed Instance.')
-param sqlMiAdminPassword string
+var labUsername = 'demouser'
+var labPassword = 'demo!pass123'
+var labSqlMiPassword = 'demo!pass1234567'
 
 var tags = {
-    workload: 'zava-sql-migration-lab'
-    managedBy: 'Skillable'
+    createdBy: azureAdUserLogin
 }
 
 /* ****************************
@@ -299,12 +286,32 @@ resource sqlMi 'Microsoft.Sql/managedInstances@2024-11-01-preview' = if (deployS
           zoneRedundant: false
           minimalTlsVersion: '1.2'
           requestedBackupStorageRedundancy: 'Geo'
-          administratorLogin: sqlMiAdminUsername
+          administratorLogin: labUsername
           #disable-next-line use-secure-value-for-secure-inputs
-          administratorLoginPassword: sqlMiAdminPassword
-
+          administratorLoginPassword: labSqlMiPassword
+          administrators: {
+              administratorType: 'ActiveDirectory'
+              principalType: 'User'
+              login: azureAdUserLogin
+              sid: azureAdUserId
+              tenantId: subscription().tenantId
+              azureADOnlyAuthentication: false
+          }
           databaseFormat: 'AlwaysUpToDate'
       }
+  }
+
+  // Assign the "Azure Connected Machine Onboarding" role to the identity fo the deployment user
+    resource sqlMiRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deploySqlMi) {
+    name: guid(resourceGroup().name, azureAdUserId, 'SqlMiContributorRole')
+    properties: {
+      roleDefinitionId: subscriptionResourceId(
+        'Microsoft.Authorization/roleDefinitions',
+        '4939a1f6-9ae0-4e48-a1e0-f2cbe897382d' // SQL Managed Instance Contributor role
+      )
+      principalId: azureAdUserId
+      principalType: 'User'
+    }
   }
 
     resource sqlMi_subnet_routetable 'Microsoft.Network/routeTables@2025-01-01'= if (deploySqlMi) {
@@ -842,7 +849,7 @@ resource onprem_sql_vm 'Microsoft.Compute/virtualMachines@2025-04-01' = {
                 publisher: 'MicrosoftSQLServer'
                 offer: 'SQL2019-WS2022'
                 sku: 'Standard'
-                version: sourceVmImageVersion
+                version: 'latest'
             }
         }
         networkProfile: {
@@ -855,9 +862,9 @@ resource onprem_sql_vm 'Microsoft.Compute/virtualMachines@2025-04-01' = {
         osProfile: {
             computerName: 'SqlServer'
             #disable-next-line adminusername-should-not-be-literal
-            adminUsername: sourceAdminUsername
+            adminUsername: labUsername
             #disable-next-line use-secure-value-for-secure-inputs
-            adminPassword: sourceAdminPassword
+            adminPassword: labPassword
         }
     }
 }
@@ -977,7 +984,7 @@ resource onprem_sql_vm_ext 'Microsoft.Compute/virtualMachines/extensions@2025-04
             }
             configurationArguments: {
                 DbBackupFileUrl: databaseBackupFileUrl
-                DatabasePassword: sourceAdminPassword
+                DatabasePassword: labPassword
             }
         }
     }

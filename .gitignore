@@ -1,13 +1,12 @@
 # ---------------------------------------------------------------------------
-# Binary release assets — published via GitHub Releases, never committed
+# Binary release assets Ã¢â‚¬â€ published via GitHub Releases, never committed
 # ---------------------------------------------------------------------------
 *.bak
 *.zip
 
 # ---------------------------------------------------------------------------
-# Generated ARM JSON from Bicep compilation
+# Generated ARM JSON
 # ---------------------------------------------------------------------------
-infra/main.json
 infra/modules/*.json
 
 # ---------------------------------------------------------------------------

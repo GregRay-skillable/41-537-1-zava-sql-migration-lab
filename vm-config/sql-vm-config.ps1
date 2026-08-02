@@ -175,12 +175,57 @@ Configuration Main {
                 Set-Acl -LiteralPath $extensionDirectory -AclObject $extensionAcl
 
                 Write-Verbose 'Installing the SQL Server (MSSQL) extension...'
-                & $codeCli `
-                    --extensions-dir $extensionDirectory `
-                    --install-extension 'ms-mssql.mssql'
 
-                if ($LASTEXITCODE -ne 0) {
-                    throw "The SQL Server (MSSQL) extension installation failed with exit code $LASTEXITCODE."
+                # VS Code can write Node.js deprecation warnings to stderr even when
+                # the extension installation succeeds. Invoking Code directly causes
+                # DSC to treat that stderr text as a non-terminating PowerShell error.
+                # Start the process separately and redirect both streams so DSC uses
+                # the process exit code as the success/failure signal.
+                $codeStdOutLog = Join-Path $env:TEMP 'vscode-mssql-install.stdout.log'
+                $codeStdErrLog = Join-Path $env:TEMP 'vscode-mssql-install.stderr.log'
+
+                Remove-Item `
+                    -LiteralPath $codeStdOutLog, $codeStdErrLog `
+                    -Force `
+                    -ErrorAction SilentlyContinue
+
+                $codeArguments = @(
+                    '--extensions-dir'
+                    $extensionDirectory
+                    '--install-extension'
+                    'ms-mssql.mssql'
+                    '--force'
+                )
+
+                $codeProcess = Start-Process `
+                    -FilePath $codeExe `
+                    -ArgumentList $codeArguments `
+                    -RedirectStandardOutput $codeStdOutLog `
+                    -RedirectStandardError $codeStdErrLog `
+                    -WindowStyle Hidden `
+                    -Wait `
+                    -PassThru
+
+                if ($codeProcess.ExitCode -ne 0) {
+                    $standardOutput = if (Test-Path -LiteralPath $codeStdOutLog) {
+                        Get-Content -LiteralPath $codeStdOutLog -Raw -ErrorAction SilentlyContinue
+                    }
+                    else {
+                        ''
+                    }
+
+                    $standardError = if (Test-Path -LiteralPath $codeStdErrLog) {
+                        Get-Content -LiteralPath $codeStdErrLog -Raw -ErrorAction SilentlyContinue
+                    }
+                    else {
+                        ''
+                    }
+
+                    throw (
+                        'The SQL Server (MSSQL) extension installation failed with ' +
+                        "exit code $($codeProcess.ExitCode). " +
+                        "STDOUT: $standardOutput STDERR: $standardError"
+                    )
                 }
 
                 $mssqlExtension = Get-ChildItem `

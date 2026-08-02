@@ -73,6 +73,131 @@ Configuration Main {
             }
         }
 
+        # Install Visual Studio Code and the SQL Server (MSSQL) extension
+        Script InstallVisualStudioCodeAndMssqlExtension {
+            GetScript = {
+                $codeExe = 'C:\Program Files\Microsoft VS Code\Code.exe'
+                $extensionDirectory = 'C:\ProgramData\VSCode\extensions'
+                $mssqlExtension = Get-ChildItem `
+                    -Path $extensionDirectory `
+                    -Directory `
+                    -Filter 'ms-mssql.mssql-*' `
+                    -ErrorAction SilentlyContinue |
+                    Select-Object -First 1
+
+                @{
+                    Result = @{
+                        VisualStudioCodeInstalled = Test-Path -LiteralPath $codeExe
+                        ExtensionDirectory         = [Environment]::GetEnvironmentVariable('VSCODE_EXTENSIONS', 'Machine')
+                        MssqlExtensionInstalled    = ($null -ne $mssqlExtension)
+                    }
+                }
+            }
+            TestScript = {
+                $codeExe = 'C:\Program Files\Microsoft VS Code\Code.exe'
+                $extensionDirectory = 'C:\ProgramData\VSCode\extensions'
+                $configuredExtensionDirectory = [Environment]::GetEnvironmentVariable(
+                    'VSCODE_EXTENSIONS',
+                    'Machine'
+                )
+                $mssqlExtension = Get-ChildItem `
+                    -Path $extensionDirectory `
+                    -Directory `
+                    -Filter 'ms-mssql.mssql-*' `
+                    -ErrorAction SilentlyContinue |
+                    Select-Object -First 1
+
+                return (
+                    (Test-Path -LiteralPath $codeExe) -and
+                    ($configuredExtensionDirectory -eq $extensionDirectory) -and
+                    ($null -ne $mssqlExtension)
+                )
+            }
+            SetScript = {
+                $codeExe = 'C:\Program Files\Microsoft VS Code\Code.exe'
+                $codeCli = 'C:\Program Files\Microsoft VS Code\bin\code.cmd'
+                $installerPath = Join-Path $env:TEMP 'VSCodeSystemSetup.exe'
+                $installerUrl = 'https://update.code.visualstudio.com/latest/win32-x64/stable'
+                $extensionDirectory = 'C:\ProgramData\VSCode\extensions'
+
+                if (-not (Test-Path -LiteralPath $codeExe)) {
+                    Write-Verbose 'Downloading the Visual Studio Code system installer...'
+                    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                    Invoke-WebRequest `
+                        -Uri $installerUrl `
+                        -OutFile $installerPath `
+                        -UseBasicParsing `
+                        -ErrorAction Stop
+
+                    Write-Verbose 'Installing Visual Studio Code for all users...'
+                    $installerProcess = Start-Process `
+                        -FilePath $installerPath `
+                        -ArgumentList '/VERYSILENT', '/NORESTART', '/MERGETASKS=!runcode' `
+                        -Wait `
+                        -PassThru
+
+                    if ($installerProcess.ExitCode -ne 0) {
+                        throw "Visual Studio Code installation failed with exit code $($installerProcess.ExitCode)."
+                    }
+
+                    Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
+                }
+
+                if (-not (Test-Path -LiteralPath $codeCli)) {
+                    throw "Visual Studio Code CLI was not found at $codeCli."
+                }
+
+                New-Item `
+                    -Path $extensionDirectory `
+                    -ItemType Directory `
+                    -Force |
+                    Out-Null
+
+                [Environment]::SetEnvironmentVariable(
+                    'VSCODE_EXTENSIONS',
+                    $extensionDirectory,
+                    [EnvironmentVariableTarget]::Machine
+                )
+
+                $usersSid = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-545')
+                $usersAccount = $usersSid.Translate(
+                    [System.Security.Principal.NTAccount]
+                ).Value
+                $extensionAcl = Get-Acl -LiteralPath $extensionDirectory
+                $extensionRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                    $usersAccount,
+                    'Modify',
+                    'ContainerInherit,ObjectInherit',
+                    'None',
+                    'Allow'
+                )
+                $extensionAcl.SetAccessRule($extensionRule)
+                Set-Acl -LiteralPath $extensionDirectory -AclObject $extensionAcl
+
+                Write-Verbose 'Installing the SQL Server (MSSQL) extension...'
+                & $codeCli `
+                    --extensions-dir $extensionDirectory `
+                    --install-extension 'ms-mssql.mssql'
+
+                if ($LASTEXITCODE -ne 0) {
+                    throw "The SQL Server (MSSQL) extension installation failed with exit code $LASTEXITCODE."
+                }
+
+                $mssqlExtension = Get-ChildItem `
+                    -Path $extensionDirectory `
+                    -Directory `
+                    -Filter 'ms-mssql.mssql-*' `
+                    -ErrorAction SilentlyContinue |
+                    Select-Object -First 1
+
+                if ($null -eq $mssqlExtension) {
+                    throw 'The SQL Server (MSSQL) extension was not found after installation.'
+                }
+
+                Write-Verbose 'Visual Studio Code and the SQL Server (MSSQL) extension are ready.'
+            }
+        }
+
         # Ensure directories exist
         foreach ($dirName in @('Logs','Data','Backup')) {
             File ("${dirName}_Directory") {

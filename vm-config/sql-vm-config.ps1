@@ -1,4 +1,4 @@
-<# 
+﻿<# 
  What does this script do?
 	- Creates Backup, Data and Logs directories
 	- Sets SQL Configs: Directories made as defaults, Enables TCP, Eables Mixed Authentication SA Account
@@ -219,28 +219,25 @@ Configuration Main {
                     )
                 }
 
-                $codeProcess.Refresh()
+                # Windows PowerShell 5.1 can return from the timed WaitForExit call
+                # before redirected stream handling and ExitCode population are complete.
+                # Call the parameterless overload once the process has exited, then cache
+                # the exit code before inspecting the installation result.
+                $codeProcess.WaitForExit()
+                $codeExitCode = $codeProcess.ExitCode
 
-                if ($codeProcess.ExitCode -ne 0) {
-                    $standardOutput = if (Test-Path -LiteralPath $codeStdOutLog) {
-                        Get-Content -LiteralPath $codeStdOutLog -Raw -ErrorAction SilentlyContinue
-                    }
-                    else {
-                        ''
-                    }
+                $standardOutput = if (Test-Path -LiteralPath $codeStdOutLog) {
+                    Get-Content -LiteralPath $codeStdOutLog -Raw -ErrorAction SilentlyContinue
+                }
+                else {
+                    ''
+                }
 
-                    $standardError = if (Test-Path -LiteralPath $codeStdErrLog) {
-                        Get-Content -LiteralPath $codeStdErrLog -Raw -ErrorAction SilentlyContinue
-                    }
-                    else {
-                        ''
-                    }
-
-                    throw (
-                        'The SQL Server (MSSQL) extension installation failed with ' +
-                        "exit code $($codeProcess.ExitCode). " +
-                        "STDOUT: $standardOutput STDERR: $standardError"
-                    )
+                $standardError = if (Test-Path -LiteralPath $codeStdErrLog) {
+                    Get-Content -LiteralPath $codeStdErrLog -Raw -ErrorAction SilentlyContinue
+                }
+                else {
+                    ''
                 }
 
                 $mssqlExtension = Get-ChildItem `
@@ -250,8 +247,27 @@ Configuration Main {
                     -ErrorAction SilentlyContinue |
                     Select-Object -First 1
 
-                if ($null -eq $mssqlExtension) {
-                    throw 'The SQL Server (MSSQL) extension was not found after installation.'
+                # The installed extension directory is the authoritative success check.
+                # VS Code may emit a harmless Node.js deprecation warning to stderr, and
+                # some Windows PowerShell hosts can expose a null ExitCode even after the
+                # command completed. Only fail for an explicit nonzero exit code or when
+                # the requested extension is absent.
+                if (
+                    (($null -ne $codeExitCode) -and ($codeExitCode -ne 0)) -or
+                    ($null -eq $mssqlExtension)
+                ) {
+                    $displayExitCode = if ($null -eq $codeExitCode) {
+                        '<unavailable>'
+                    }
+                    else {
+                        $codeExitCode
+                    }
+
+                    throw (
+                        'The SQL Server (MSSQL) extension installation failed with ' +
+                        "exit code $displayExitCode. " +
+                        "STDOUT: $standardOutput STDERR: $standardError"
+                    )
                 }
 
                 Write-Verbose 'Visual Studio Code and the SQL Server (MSSQL) extension are ready.'

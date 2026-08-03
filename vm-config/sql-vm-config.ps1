@@ -189,22 +189,37 @@ Configuration Main {
                     -Force `
                     -ErrorAction SilentlyContinue
 
-                $codeArguments = @(
-                    '--extensions-dir'
+                # Invoke code.cmd through cmd.exe. Calling Code.exe directly starts the
+                # full Electron GUI under the DSC SYSTEM account and never returns.
+                $codeCommand = (
+                    '""{0}" --extensions-dir "{1}" --install-extension ms-mssql.mssql"' -f
+                    $codeCli,
                     $extensionDirectory
-                    '--install-extension'
-                    'ms-mssql.mssql'
-                    '--force'
                 )
 
                 $codeProcess = Start-Process `
-                    -FilePath $codeExe `
-                    -ArgumentList $codeArguments `
+                    -FilePath $env:ComSpec `
+                    -ArgumentList '/d', '/s', '/c', $codeCommand `
                     -RedirectStandardOutput $codeStdOutLog `
                     -RedirectStandardError $codeStdErrLog `
                     -WindowStyle Hidden `
-                    -Wait `
                     -PassThru
+
+                $codeInstallTimeoutSeconds = 600
+                $codeProcessCompleted = $codeProcess.WaitForExit(
+                    $codeInstallTimeoutSeconds * 1000
+                )
+
+                if (-not $codeProcessCompleted) {
+                    & taskkill.exe /PID $codeProcess.Id /T /F 2>&1 | Out-Null
+
+                    throw (
+                        'The SQL Server (MSSQL) extension installation exceeded ' +
+                        "$codeInstallTimeoutSeconds seconds and was terminated."
+                    )
+                }
+
+                $codeProcess.Refresh()
 
                 if ($codeProcess.ExitCode -ne 0) {
                     $standardOutput = if (Test-Path -LiteralPath $codeStdOutLog) {
